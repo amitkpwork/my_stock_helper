@@ -17,6 +17,7 @@ from plotly.subplots import make_subplots
 import briefing as br
 import categories as cat
 import signals as sg
+import ui
 import storage as store
 
 DEFAULT = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ITC"]
@@ -194,8 +195,7 @@ mid_cr = st.sidebar.number_input("Mid cap if >= (Rs crore); below = Small", valu
 st.sidebar.caption("Approximate. SEBI/AMFI publish the official large/mid/small list twice a year; adjust these to match.")
 st.sidebar.caption("Data: Yahoo Finance via yfinance (delayed, unofficial). Not investment advice.")
 
-brief_box = st.container()  # filled in after the watchlist is scored
-tab1, tab2, tab3, tab4 = st.tabs(["Watchlist & ranking", "Stock detail", "Backtest", "Screener"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Watchlist & ranking", "Stock detail", "Backtest", "Screener"])
 
 # ---------- tab 1 ----------
 with tab1:
@@ -215,12 +215,12 @@ with tab1:
     if "Score" in tbl:
         tbl = tbl.sort_values("Score", ascending=False, na_position="last").drop(columns="Score")
     st.subheader("Ranked by technical score")
-    st.dataframe(tbl, width="stretch", hide_index=True)
+    st.dataframe(ui.style_table(tbl, ("Day %",), "Signal"), width="stretch", hide_index=True)
     st.caption("Higher score = stronger trend, momentum and relative strength in the stock's own history. "
                "It is a shortlist aid: check the Backtest tab and fundamentals before acting.")
 
-# ---------- daily brief (rendered at the top of the page) ----------
-with brief_box:
+# ---------- tab 0: summary (filled after the watchlist is scored) ----------
+with tab0:
     now = br.now_ist()
     snap, news = cached_snapshot(), cached_news()
     watch = [r for r in rows if r.get("Signal") not in (None, "No data")]
@@ -228,31 +228,56 @@ with brief_box:
                "snapshot": snap, "headlines": [n["title"] for n in news[:12]],
                "watchlist": [{k: r.get(k) for k in ("Symbol", "Day %", "Signal")} for r in watch]}
     ai_text = cached_claude_brief(json.dumps(payload, default=str))
-    st.markdown(f"## Good day, {user_name}")
-    st.write(ai_text or br.rule_based_brief(user_name, now, snap, news, watch))
-    st.caption("AI-written from the data and headlines below; not a forecast or advice." if ai_text else
-               "Fact-based summary. Set ANTHROPIC_API_KEY (and pip install anthropic) for a written outlook.")
-    if snap:
-        st.dataframe(pd.DataFrame([{"Market": m["name"], "Level": f"{m['price']:,.2f}", "Change": f"{m['chg_pct']:+.2f}%"} for m in snap]),
-                     hide_index=True, width="stretch")
-    if news:
-        with st.expander(f"Latest headlines ({len(news)})"):
-            for n in news:
-                st.markdown(f"- [{n['title']}]({n['link']}) - *{n['source']}*")
-    else:
-        st.caption("No headlines loaded (feeds unreachable or feedparser not installed).")
-    st.divider()
+    st.markdown(f"### Good day, {user_name}")
+    left, right = st.columns([3, 2])
+    with left:
+        st.write(ai_text or br.rule_based_brief(user_name, now, snap, news, watch))
+        st.caption("AI-written from the data and headlines; not a forecast or advice." if ai_text else
+                   "Fact-based summary. Set ANTHROPIC_API_KEY (and pip install anthropic) for a written outlook.")
+        if news:
+            st.markdown("**Headlines**")
+            for n in news[:6]:
+                st.markdown(f"- [{n['title']}]({n['link']})")
+            if len(news) > 6:
+                with st.expander(f"More headlines ({len(news) - 6})"):
+                    for n in news[6:]:
+                        st.markdown(f"- [{n['title']}]({n['link']}) - *{n['source']}*")
+        else:
+            st.caption("No headlines loaded (feeds unreachable or feedparser not installed).")
+    with right:
+        if snap:
+            st.markdown("**Markets**")
+            sdf = pd.DataFrame([{"Market": m["name"], "Level": m["price"], "Change %": m["chg_pct"]} for m in snap])
+            st.dataframe(ui.style_table(sdf, ("Change %",)), hide_index=True, width="stretch")
+            st.caption("Colour shows direction only. A rising India VIX or crude price is usually a caution sign.")
+        mv = pd.DataFrame([{"Symbol": r["Symbol"], "Price": r.get("Price"), "Day %": r.get("Day %"), "Signal": r.get("Signal")}
+                           for r in watch if r.get("Price") is not None])
+        if not mv.empty:
+            st.markdown("**Your watchlist today**")
+            st.dataframe(ui.style_table(mv.sort_values("Day %", ascending=False), ("Day %",), "Signal"),
+                         hide_index=True, width="stretch")
 
 # ---------- tab 2 ----------
 with tab2:
-    if symbols:
-        sym = st.selectbox("Symbol", symbols)
+    ca, cb = st.columns(2)
+    pick = ca.selectbox("From your watchlist", symbols) if symbols else None
+    typed = cb.text_input("Or type any symbol", key="detail_sym", placeholder="e.g. TATAMOTORS, ZOMATO, 500325.BO",
+                          help="Plain names use the exchange chosen in the sidebar. Add .NS or .BO to force one.")
+    sym = norm(typed, ex) if typed.strip() else pick
+    if not sym:
+        st.info("Add a stock to your watchlist, or type any NSE/BSE symbol above.")
+    else:
         d = analyse(sym)
         if d is None:
-            st.warning("No data for this symbol.")
+            st.warning(f"No data found for {sym}. Check the spelling. NSE names look like RELIANCE; "
+                       "BSE can use RELIANCE.BO or the numeric code such as 500325.BO.")
         else:
+            if sym not in symbols:
+                st.button(f"Add {sym} to watchlist", on_click=pin_to_watchlist, args=([sym],))
+            if len(d) < 260:
+                st.caption("Under about a year of history, so the 200-day average and score are not reliable for this stock.")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
-            fig.add_trace(go.Candlestick(x=d.index, open=d.Open, high=d.High, low=d.Low, close=d.Close, name="Price"), 1, 1)
+            fig.add_trace(go.Candlestick(x=d.index, open=d.Open, high=d.High, low=d.Low, close=d.Close, name="Price", increasing_line_color=ui.GREEN, decreasing_line_color=ui.RED), 1, 1)
             for col, color in [("SMA50", "orange"), ("SMA200", "purple")]:
                 fig.add_trace(go.Scatter(x=d.index, y=d[col], name=col, line=dict(color=color, width=1.3)), 1, 1)
             fig.add_trace(go.Scatter(x=d.index, y=d.RSI, name="RSI", line=dict(width=1.2)), 2, 1)
@@ -265,7 +290,7 @@ with tab2:
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown(f"**Why the score is {int(comp.sum())} / {sg.MAX_SCORE}**")
-                st.dataframe(comp.rename("Points").to_frame(), width="stretch")
+                st.dataframe(ui.style_table(comp.rename("Points").to_frame(), ("Points",)), width="stretch")
             with c2:
                 st.markdown("**Fundamentals (context only)**")
                 f = fundamentals(sym)
@@ -284,7 +309,7 @@ with tab3:
         else:
             r = sg.backtest(d, entry, exit_)
             m = pd.DataFrame({"Strategy": r["strategy"], "Buy & hold": r["buy_hold"]}).round(1)
-            st.dataframe(m, width="stretch")
+            st.dataframe(ui.style_table(m, tuple(m.columns), num_fmt="{:+.1f}"), width="stretch")
             st.line_chart(pd.DataFrame({"Strategy": r["equity"], "Buy & hold": r["bh_equity"]}))
             st.caption(f"{r['trades']} trades, in market {r['time_in_market_%']:.0f}% of the time, 0.1% cost per trade. "
                        "Past results on one stock say little about the future; test several stocks and periods.")
@@ -376,7 +401,7 @@ with tab4:
             show.insert(0, "In watchlist", show.Symbol.isin(symbols))
             show.insert(0, "Pin", False)
             editor_key = f"pins_{st.session_state.get('pin_gen', 0)}_{lo}_{plo}_{phi}_{len(view)}"
-            edited = st.data_editor(show, key=editor_key, width="stretch", hide_index=True,
+            edited = st.data_editor(ui.style_table(show, ("6m vs index %",), "Signal"), key=editor_key, width="stretch", hide_index=True,
                                     disabled=[c for c in show.columns if c != "Pin"],
                                     column_config={"Pin": st.column_config.CheckboxColumn("Pin", help="Tick, then click the button below")})
             picked = edited.loc[edited["Pin"], "Symbol"].tolist()

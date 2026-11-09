@@ -88,8 +88,6 @@ def rule_based_brief(name: str, now: dt.datetime, snap: list[dict], news: list[d
         lines.append(f"On your watchlist: biggest gainer {movers[-1]['Symbol']} ({movers[-1]['Day %']:+.2f}%), "
                      f"biggest faller {movers[0]['Symbol']} ({movers[0]['Day %']:+.2f}%)"
                      + (f"; {len(strong)} stock(s) currently score Strong." if strong else "."))
-    if news:
-        lines.append("Top headlines: " + " | ".join(n["title"] for n in news[:3]))
     return "\n\n".join(lines)
 
 
