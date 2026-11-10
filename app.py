@@ -188,7 +188,10 @@ txt = st.sidebar.text_area("Watchlist (one symbol per line)", key="wl_text", hei
 symbols = list(dict.fromkeys(filter(None, (norm(s, ex) for s in txt.splitlines()))))
 if st.sidebar.button("Save watchlist"):
     ok = store.save("watchlist.json", [s.rsplit(".", 1)[0] if s.endswith(ex) else s for s in symbols])
-    st.sidebar.success("Saved") if ok else st.sidebar.error("Could not save (check GIST_ID / GITHUB_TOKEN secrets)")
+    if ok:
+        st.sidebar.success("Saved")
+    else:
+        st.sidebar.error("Could not save (check GIST_ID / GITHUB_TOKEN secrets)")
 st.sidebar.markdown("**Market-cap buckets (screener)**")
 large_cr = st.sidebar.number_input("Large cap if market cap >= (Rs crore)", value=80000, step=5000)
 mid_cr = st.sidebar.number_input("Mid cap if >= (Rs crore); below = Small", value=25000, step=2500)
@@ -294,7 +297,10 @@ with tab2:
             with c2:
                 st.markdown("**Fundamentals (context only)**")
                 f = fundamentals(sym)
-                st.dataframe(pd.Series(f, name="Value").astype(str).to_frame(), width="stretch") if f else st.info("Not available.")
+                if f:
+                    st.dataframe(pd.Series(f, name="Value").astype(str).to_frame(), width="stretch")
+                else:
+                    st.info("Not available.")
 
 # ---------- tab 3 ----------
 with tab3:
